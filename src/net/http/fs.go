@@ -7,6 +7,7 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -121,6 +122,51 @@ func dirList(w ResponseWriter, r *Request, f File) {
 		fmt.Fprintf(w, "<a href=\"%s\">%s</a>\n", url.String(), htmlReplacer.Replace(name))
 	}
 	fmt.Fprintf(w, "</pre>\n")
+}
+
+type jsonDirItem struct {
+	Name    string    `json:"name"`
+	Type    string    `json:"type"`
+	ModTime time.Time `json:"mtime"`
+	Size    int64     `json:"size,omitempty"`
+}
+
+func jsonDirList(w ResponseWriter, r *Request, f File) {
+	dirs, err := f.Readdir(-1)
+	if err != nil {
+		logf(r, "http: error reading directory: %v", err)
+		Error(w, "Error reading directory", StatusInternalServerError)
+		return
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name() < dirs[j].Name() })
+
+	var fileList []jsonDirItem
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	for _, d := range dirs {
+		name := d.Name()
+		// name may contain '?' or '#', which must be escaped to remain
+		// part of the URL path, and not indicate the start of a query
+		// string or fragment.
+
+		file := jsonDirItem{}
+		file.Name = name
+		file.Type = fileType(d)
+		file.ModTime = d.ModTime()
+		if file.Type == "file" {
+			file.Size = d.Size()
+		}
+		fileList = append(fileList, file)
+	}
+	json.NewEncoder(w).Encode(fileList)
+}
+
+func fileType(fm os.FileInfo) (ftype string) {
+	if fm.IsDir() {
+		ftype = "directory"
+	} else {
+		ftype = "file"
+	}
+	return
 }
 
 // ServeContent replies to the request using the content in the
@@ -611,7 +657,7 @@ func serveFile(w ResponseWriter, r *Request, fs FileSystem, name string, redirec
 			return
 		}
 		w.Header().Set("Last-Modified", d.ModTime().UTC().Format(TimeFormat))
-		dirList(w, r, f)
+		jsonDirList(w, r, f)
 		return
 	}
 
